@@ -8,46 +8,50 @@
 
 #define PerPage 13  //每页显示多少个游戏
 #define FindMB 4     //每隔4mb找一个游戏
-#define MAX_ITEMS 18     //最多18个游戏 
-#define NAME_LEN 16
+#define MAX_ITEMS 64     //最多18个游戏 
+#define NAME_LEN 16     //名字16个字夫
+
+
 //! Put function in IWRAM.
 #define IWRAM_CODE __attribute__((section(".iwram"), long_call))
 __attribute__ ((section(".devkitadv.config"))) int __gba_multiboot;// MULTIBOOT
 
 
-struct BootItem{
+typedef struct{
     char name[NAME_LEN + 1];
     u8 Addr;
-};
-
+}BootItem;
 
 BootItem item[MAX_ITEMS];
+
 int Page = 0;
 int Select = 0;
 int gameCnt = 0;
 u8 sramBackup[3];
-char* title = (char*)0x80000A0;
-char* logo = (char*)0x8000004;
-char* MapperReg1 = (char*)0x0E000002;//Bank 选择信号
-char* MapperReg2 = (char*)0x0E000003;// 与上0x80=Lock
-char* MapperReg3 = (char*)0x0E000004;
+char *title = (char*)0x80000A0;
+char *logo = (char*)0x8000004;
 
 
 inline void backupSram(){
-    sramBackup[0] = *MapperReg1;
-    sramBackup[1] = *MapperReg2;
-    sramBackup[2] = *MapperReg3;
+    sramBackup[0] = *(vu8*)0x0E000002;//Bank 选择信号
+    sramBackup[1] = *(vu8*)0x0E000003;
+    sramBackup[2] = *(vu8*)0x0E000004;
     return;
 }
 
 
 inline void restoreSram(){
-    *(MapperReg1)=sramBackup[0];
-    *(MapperReg2)=sramBackup[1];
-    *(MapperReg3)=sramBackup[2];
+    *(vu8*)0x0E000002 = sramBackup[0];
+    *(vu8*)0x0E000003 = sramBackup[1];
+    *(vu8*)0x0E000004 = sramBackup[2];
     return;
 }
 
+/*//gbabf代码
+*(vu8*)0x0A000002 = addr.byte[3];
+*(vu8*)0x0A000003 = addr.byte[2];
+*(vu8*)0x0A000004 = addr.byte[1];
+*/
 
 IWRAM_CODE void gotoChipOffset(u8 Addr,char Lock){
     
@@ -55,15 +59,15 @@ IWRAM_CODE void gotoChipOffset(u8 Addr,char Lock){
     union{
 		u32 addr;
 		u8 byte[4];
-	}addr;
-	addr.addr = chipAddr;
+	}add;
+	add.addr = chipAddr;
 	u16 data = *(vu16*)(0xBD|0x8000000);
 
-    *(MapperReg1)=addr.byte[3];
-    *(MapperReg2)=addr.byte[2];
-    *(MapperReg3)=addr.byte[1];
+    *(vu8*)0x0E000002 = add.byte[3];
+    *(vu8*)0x0E000003 = add.byte[2];
+    *(vu8*)0x0E000004 = add.byte[1];
     if(Lock){
-        *(MapperReg2)=addr.byte[2] | 0x80;
+        *(vu8*)0x0E000003 = add.byte[2] | 0x80;
     }
     
 	int timeout = 0x1000;
@@ -71,7 +75,8 @@ IWRAM_CODE void gotoChipOffset(u8 Addr,char Lock){
     
     if(Lock){//Backup is done at findGames()
         restoreSram();//还原
-        __asm("SWI 0");
+        __asm volatile ("swi 0x26":::);
+		__asm("SWI 0");
     }
     return;
 }
@@ -95,7 +100,7 @@ static const unsigned char nintendo_logo[] =
 IWRAM_CODE void findGames(){
 
     u16 Addr;
-    for(Addr = FindMB ;Addr < MAX_ITEMS*FindMB; Addr += FindMB){
+    for(Addr = 0 ;Addr < MAX_ITEMS*FindMB; Addr += FindMB){
         gotoChipOffset(Addr,0);
         if(memcmp(nintendo_logo, logo, sizeof(nintendo_logo)) == 0){
 			strncpy(item[gameCnt].name, title, NAME_LEN);
@@ -113,9 +118,9 @@ void Redraw(){
 	
 	printf("\e[2J========GBA Multi Menu========\n");
 	for(int i = 0; i < PerPage; i++){
-		int x = Page*PerPage + i;
-		int y = (Page*PerPage + i)*FindMB;
-		printf("\n%c %02u.%12s %dMB",(i == Select) ? '>' : ' ', x+1, item[x].name, y);
+		int x = Page*PerPage + i + 1;//+1解决初始0位置不算游戏
+		int y = (Page*PerPage + i + 1)*FindMB;//+1解决初始0位置不算游戏
+		printf("\n%c %02u.%12s %dMB",(i == Select) ? '>' : ' ', x, item[x].name, y);
 	}
 	printf("\n\n==============================");
     printf("\nPage %d",Page);//第几页
@@ -129,10 +134,10 @@ int main(void) {
 	irqEnable(IRQ_VBLANK);
 	consoleInit( 0 , 4 , 0, NULL , 0 , 15);
 
-	BG_COLORS[0]=RGB8(33,171,243);
-	BG_COLORS[241]=RGB5(31,31,31);
+	BG_COLORS[0]=RGB8(33,171,243);//背景颜色
+	BG_COLORS[241]=RGB5(31,31,31);//文字颜色
 
-	SetMode(MODE_1 | BG0_ON);
+	SetMode(MODE_0 | BG0_ON);
 	VBlankIntrWait();//添加以启动
 	backupSram();
     findGames();
@@ -164,7 +169,7 @@ int main(void) {
             Redraw();
         }
         if(keys & KEY_A) {
-            gotoChipOffset(item[PerPage*Page+Select].Addr,1);
+            gotoChipOffset(item[PerPage*Page+Select+1].Addr,1);//+1实现第2个游戏开始，让出第一个菜单选择
         }
     }
 	return 0;
